@@ -186,10 +186,43 @@ def process_page_content(text):
     in_dialogue = False
 
     for line in lines:
+        # Gestion spéciale pour les lignes commençant par "Partie"
+        if line.lower().startswith("partie"):
+            # Si on avait un paragraphe en cours, on le sauvegarde d'abord
+            if current_paragraph:
+                if in_dialogue:
+                    paragraphs.append(
+                        f"<blockquote>{current_paragraph.strip()}</blockquote>"
+                    )
+                else:
+                    paragraphs.append(f"<p>{current_paragraph.strip()}</p>")
+                current_paragraph = ""
+                in_dialogue = False
+
+            # Traitement spécial pour la ligne "Partie X [...]"
+            partie_match = re.match(
+                r"^(Partie\s+\d+)\s*[:\-–]?\s*(.*)$", line, re.IGNORECASE
+            )
+            if partie_match:
+                titre_partie = partie_match.group(1)
+                contenu_partie = partie_match.group(2)
+
+                # Ajouter le titre
+                paragraphs.append(f"<h2>{titre_partie}</h2>")
+
+                # Ajouter le contenu s'il existe
+                if contenu_partie:
+                    paragraphs.append(f"<p>{contenu_partie}</p>")
+            else:
+                # Fallback si le pattern ne correspond pas
+                paragraphs.append(f"<h2>{line}</h2>")
+
+            continue
+
         # Gestion des dialogues commençant par "—"
         if line.startswith("—"):
             if current_paragraph and not in_dialogue:
-                paragraphs.append(current_paragraph.strip())
+                paragraphs.append(f"<p>{current_paragraph.strip()}</p>")
                 current_paragraph = ""
             in_dialogue = True
             current_paragraph += line + " "
@@ -217,21 +250,8 @@ def process_page_content(text):
         else:
             paragraphs.append(f"<p>{current_paragraph.strip()}</p>")
 
-    # Améliorer le formatage pour HTML
-    formatted_paragraphs = []
-    for paragraph in paragraphs:
-        if paragraph.lower().startswith("<p>partie"):
-            # Mettre en avant les parties avec un titre
-            formatted_paragraphs.append(
-                paragraph.replace("<p>", "<h2>").replace("</p>", "</h2>")
-            )
-        else:
-            formatted_paragraphs.append(paragraph)
-
     # Joindre les paragraphes formatés
-    formatted_text = "\n".join(formatted_paragraphs)
-
-    return formatted_text
+    return "\n".join(paragraphs)
 
 
 def extract_chapters(text):
