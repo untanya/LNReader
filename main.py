@@ -235,26 +235,30 @@ class NovelConverter:
         for page_num in range(len(doc)):
             page = doc[page_num]
             image_list = page.get_images(full=True)
+            print(f"Page {page_num+1}: Found {len(image_list)} images")  # Debug log
 
             for img_idx, img in enumerate(image_list):
                 try:
                     xref = img[0]
                     base_image = doc.extract_image(xref)
                     image_bytes = base_image["image"]
+                    image_type = base_image.get("ext", "jpeg")  # Get image type, default to jpeg
 
                     # Vérifier la taille minimale
                     if len(image_bytes) < 10000:  # Ignorer les petites images
+                        print(f"Skipping small image {img_idx} on page {page_num+1} (size: {len(image_bytes)} bytes)")
                         continue
 
                     img_data = base64.b64encode(image_bytes).decode("utf-8")
+                    print(f"Successfully processed image {img_idx} on page {page_num+1}")  # Debug log
                     self.elements.append({
                         'type': 'image',
-                        'data': f"data:image/jpeg;base64,{img_data}",
+                        'data': f"data:image/{image_type};base64,{img_data}",
                         'alt': f"Image {page_num+1}-{img_idx+1}",
                         'page': page_num + 1
                     })
                 except Exception as e:
-                    print(f"Erreur lors de l'extraction de l'image: {e}")
+                    print(f"Erreur lors de l'extraction de l'image {img_idx} sur la page {page_num+1}: {str(e)}")
 
     def save_html(self, output_path: str) -> None:
         """Génère et sauve le fichier HTML final."""
@@ -275,13 +279,22 @@ class NovelConverter:
         
         for element in sorted_elements:
             # Si on change de page ou si la page a changé de +/- 1
-            if abs(element['page'] - current_page) > 1:
-                if current_container:
-                    containers.append(self._create_container(current_container))
-                    current_container = []
-                current_page = element['page']
-            
-            current_container.append(element)
+            if 'content' in element:
+                # Ne pas ajouter l'élément s'il contient "Page |"
+                if not re.search(r"Page \| \d+", element['content']):
+                    if abs(element['page'] - current_page) > 1:
+                        if current_container:
+                            containers.append(self._create_container(current_container))
+                            current_container = []
+                        current_page = element['page']
+                    current_container.append(element)
+            else:  # C'est probablement une image
+                if abs(element['page'] - current_page) > 1:
+                    if current_container:
+                        containers.append(self._create_container(current_container))
+                        current_container = []
+                    current_page = element['page']
+                current_container.append(element)
             
         # Ajouter le dernier container
         if current_container:
@@ -304,9 +317,10 @@ class NovelConverter:
                 processed_text = self.processor.process_content(element['content'])
                 content.append(processed_text)
             elif element['type'] == 'image':
+                print(f"Processing image in container: {element['alt']}")  # Debug log
                 content.append(f'''
                     <div class="image-wrapper">
-                        <img src="{element['data']}" alt="{element['alt']}">
+                        <img src="{element['data']}" alt="{element['alt']}" />
                     </div>
                 ''')
         
