@@ -1,4 +1,7 @@
 .pycache
 .vscode
-*.pdf
-*.html
+
+input/*.pdf
+output/*.html
+!input/sample.pdf
+!output/sample.html
