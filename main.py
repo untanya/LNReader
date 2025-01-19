@@ -12,7 +12,7 @@ class ChapterInfo:
     number: int
     title: str
     content: str
-    coordinates: Optional[tuple] = None  # Ajouter les coordonnées du chapitre
+    coordinates: Optional[tuple] = None 
 
 
 @dataclass
@@ -151,7 +151,7 @@ class TextProcessor:
 class NovelConverter:
     def __init__(self, metadata: NovelMetadata):
         self.metadata = metadata
-        self.elements = []  # Va contenir tous les éléments (texte et images) avec leurs coordonnées
+        self.elements = []
         self.processor = TextProcessor(metadata.language)
         self.pattern_matcher = NovelPatternMatcher()
 
@@ -175,7 +175,7 @@ class NovelConverter:
             blocks = page.get_text("dict")["blocks"]
 
             for block in blocks:
-                if block['type'] == 0:  # Text block
+                if block['type'] == 0:
                     text_line = ""
                     for line in block["lines"]:
                         text_line += " ".join([span['text'] for span in line["spans"]]) + " "
@@ -206,7 +206,6 @@ class NovelConverter:
                             'type': 'text'
                         })
 
-        # Sauvegarder le dernier chapitre
         if current_chapter:
             self._add_chapter_to_elements(chapter_number, current_chapter)
 
@@ -399,24 +398,19 @@ class NovelConverter:
 def convert_novel(pdf_path: str, output_path: str, title: str = None) -> bool:
     """Fonction principale pour convertir un novel PDF en HTML."""
     try:
-        # Détecter la langue du document
         doc = fitz.open(pdf_path)
         sample_text = ""
-        for page in range(min(5, len(doc))):  # Échantillon des 5 premières pages
-            sample_text += doc[page].get_text()
+        for page in range(min(5, len(doc))):
+            sample_text += doc[page].get_text() 
         doc.close()
 
-        detected_language = detect(sample_text)[
-            :2
-        ]  # Prendre les 2 premiers caractères (fr, en, ja, etc.)
+        detected_language = detect(sample_text)[:2]
 
-        # Créer les métadonnées
         metadata = NovelMetadata(
             title=title or os.path.splitext(os.path.basename(pdf_path))[0],
             language=detected_language,
         )
 
-        # Initialiser et utiliser le convertisseur
         converter = NovelConverter(metadata)
         converter.process_pdf(pdf_path)
         converter.save_html(output_path)
