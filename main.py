@@ -1,344 +1,504 @@
 import os
-from PyPDF2 import PdfReader
-from bs4 import BeautifulSoup
-import base64
-from PIL import Image
-from io import BytesIO
-import fitz  # PyMuPDF pour extraire les images
 import re
+import fitz
+import base64
+from dataclasses import dataclass
+from typing import List, Dict, Optional
+from langdetect import detect
 
 
-class LightNovelConverter:
-    def __init__(self, title):
-        self.title = title
-        self.chapters = []
-        self.images = []
+@dataclass
+class ChapterInfo:
+    number: int
+    title: str
+    content: str
 
-    def add_chapter(self, number, title, content):
-        self.chapters.append({"number": number, "title": title, "content": content})
 
-    def add_image(self, image_data, alt_text=""):
+@dataclass
+class NovelMetadata:
+    title: str
+    language: str
+    author: Optional[str] = None
+    series: Optional[str] = None
+    volume: Optional[str] = None
+
+
+class NovelPatternMatcher:
+    """Gère les patterns de reconnaissance pour différents formats de novels."""
+
+    def __init__(self):
+        self.patterns = {
+            "fr": {
+                "chapter": [
+                    r"(?i)^chapitre\s*(\d+)\s*[:|\-|–]?\s*(.*)$",
+                    r"(?i)^partie\s*(\d+)\s*[:|\-|–]?\s*(.*)$",
+                ],
+                "dialogue": ["—", "–", "-"],
+                "section": [
+                    r"(?i)^(prologue)\s*[:|\-|–]?\s*(.*)$",
+                    r"(?i)^(épilogue)\s*[:|\-|–]?\s*(.*)$",
+                ],
+            },
+            "en": {
+                "chapter": [
+                    r"(?i)^chapter\s*(\d+)\s*[:|\-|–]?\s*(.*)$",
+                    r"(?i)^part\s*(\d+)\s*[:|\-|–]?\s*(.*)$",
+                ],
+                "dialogue": ['"', "'", '"', '"'],
+                "section": [
+                    r"(?i)^(prologue)\s*[:|\-|–]?\s*(.*)$",
+                    r"(?i)^(epilogue)\s*[:|\-|–]?\s*(.*)$",
+                ],
+            },
+            "ja": {
+                "chapter": [
+                    r"^第(\d+)章\s*[:|\-|–]?\s*(.*)$",
+                    r"^(\d+)章\s*[:|\-|–]?\s*(.*)$",
+                ],
+                "dialogue": ["「", "」"],
+                "section": [
+                    r"^(プロローグ)\s*[:|\-|–]?\s*(.*)$",
+                    r"^(エピローグ)\s*[:|\-|–]?\s*(.*)$",
+                ],
+            },
+        }
+
+    def get_patterns(self, language: str) -> Dict:
+        """Retourne les patterns pour une langue donnée."""
+        return self.patterns.get(language, self.patterns["en"])
+
+    def detect_chapter(self, text: str, language: str) -> Optional[tuple]:
+        """Détecte si une ligne est un chapitre."""
+        patterns = self.get_patterns(language)["chapter"]
+        for pattern in patterns:
+            match = re.match(pattern, text)
+            if match:
+                return match.groups()
+        return None
+
+
+class TextProcessor:
+    def __init__(self, language: str):
+        self.language = language
+        self.pattern_matcher = NovelPatternMatcher()
+        self.patterns = self.pattern_matcher.get_patterns(language)
+        self.sentence_endings = {".", "!", "?", "...", "。", "！", "？"}
+
+    def process_content(self, text: str) -> str:
+        """Traite le contenu du texte en gérant dialogues et paragraphes."""
+        lines = [line.strip() for line in text.split("\n") if self._is_valid_line(line)]
+        paragraphs = []
+        current_paragraph = ""
+        in_dialogue = False
+
+        for line in lines:
+            # Vérifier si c'est un dialogue
+            if self._is_dialogue_start(line):
+                if current_paragraph and not in_dialogue:
+                    paragraphs.append(self._wrap_paragraph(current_paragraph))
+                    current_paragraph = ""
+                in_dialogue = True
+                current_paragraph += line + " "
+            elif in_dialogue:
+                current_paragraph += line + " "
+                if self._is_sentence_end(line):
+                    paragraphs.append(self._wrap_dialogue(current_paragraph))
+                    current_paragraph = ""
+                    in_dialogue = False
+            else:
+                current_paragraph += line + " "
+                if self._is_sentence_end(line):
+                    paragraphs.append(self._wrap_paragraph(current_paragraph))
+                    current_paragraph = ""
+
+        if current_paragraph:
+            paragraphs.append(
+                self._wrap_dialogue(current_paragraph)
+                if in_dialogue
+                else self._wrap_paragraph(current_paragraph)
+            )
+
+        return "\n".join(paragraphs)
+
+    def _is_valid_line(self, line: str) -> bool:
+        """Vérifie si une ligne doit être traitée."""
+        if not line.strip():
+            return False
+        if line.startswith(("http://", "https://")):
+            return False
+        # Ajouter d'autres conditions si nécessaire
+        return True
+
+    def _is_dialogue_start(self, line: str) -> bool:
+        """Vérifie si la ligne commence par un marqueur de dialogue."""
+        return any(
+            line.strip().startswith(marker) for marker in self.patterns["dialogue"]
+        )
+
+    def _is_sentence_end(self, line: str) -> bool:
+        """Vérifie si la ligne se termine par une fin de phrase."""
+        return any(line.strip().endswith(end) for end in self.sentence_endings)
+
+    def _wrap_paragraph(self, text: str) -> str:
+        """Enveloppe le texte dans des balises de paragraphe."""
+        return f"<p>{text.strip()}</p>"
+
+    def _wrap_dialogue(self, text: str) -> str:
+        """Enveloppe le texte dans des balises de dialogue."""
+        return f"<blockquote>{text.strip()}</blockquote>"
+
+
+class NovelConverter:
+    def __init__(self, metadata: NovelMetadata):
+        self.metadata = metadata
+        self.chapters: List[ChapterInfo] = []
+        self.images: List[Dict] = []
+        self.processor = TextProcessor(metadata.language)
+        self.pattern_matcher = NovelPatternMatcher()
+
+    def process_pdf(self, pdf_path: str) -> None:
+        """Traite le PDF et extrait le contenu et les images."""
+        doc = fitz.open(pdf_path)
         try:
-            img_data = base64.b64encode(image_data).decode("utf-8")
-            self.images.append(
-                {"data": f"data:image/jpeg;base64,{img_data}", "alt": alt_text}
-            )
-        except Exception as e:
-            print(f"Erreur lors du chargement de l'image: {e}")
+            self._extract_content(doc)
+            self._extract_images(doc)
+        finally:
+            doc.close()
 
-    def generate_html(self):
-        # HTML Template reste le même que dans votre code original
-        html_template = """
-        <!DOCTYPE html>
-        <html lang="fr">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>{title}</title>
-            <style>
-                :root {{
-                    --bg-color: #1a1a1a;
-                    --text-color: #e0e0e0;
-                    --header-bg: #2d2d2d;
-                    --link-color: #66b3ff;
-                }}
-                
-                body {{
-                    background-color: var(--bg-color);
-                    color: var(--text-color);
-                    font-family: 'Arial', sans-serif;
-                    line-height: 1.6;
-                    margin: 0;
-                    padding: 0;
-                }}
-                
-                .header {{
-                    background-color: var(--header-bg);
-                    padding: 1rem;
-                    position: sticky;
-                    top: 0;
-                    z-index: 100;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-                }}
-                
-                .container {{
-                    max-width: 800px;
-                    margin: 0 auto;
-                    padding: 1rem;
-                }}
-                
-                .chapter {{
-                    margin-bottom: 2rem;
-                    padding: 1rem;
-                    background-color: rgba(255,255,255,0.05);
-                    border-radius: 8px;
-                }}
-                
-                .chapter-title {{
-                    color: var(--link-color);
-                    margin-bottom: 1rem;
-                }}
-                
-                .toc {{
-                    margin: 2rem 0;
-                    padding: 1rem;
-                    background-color: var(--header-bg);
-                    border-radius: 8px;
-                }}
-                
-                .toc-item {{
-                    color: var(--link-color);
-                    text-decoration: none;
-                }}
-                
-                .toc-item:hover {{
-                    text-decoration: underline;
-                }}
-                
-                img {{
-                    max-width: 100%;
-                    height: auto;
-                    border-radius: 8px;
-                    margin: 1rem 0;
-                }}
-                
-                p {{
-                    margin-bottom: 1.5em;
-                    text-align: justify;
-                }}
-                
-                blockquote {{
-                    margin: 1.5rem 0;
-                    padding: 1rem;
-                    background-color: rgba(255, 255, 255, 0.1);
-                    border-left: 4px solid var(--link-color);
-                    font-style: italic;
-                    color: var(--text-color);
-                }}
-                
-                @media (max-width: 768px) {{
-                    .container {{
-                        padding: 0.5rem;
-                    }}
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <div class="container">
-                    <h1>{title}</h1>
-                </div>
-            </div>
-            
-            <div class="container">
-                <div class="toc">
-                    <h2>Table des matières</h2>
-                    <ul>
-                        {toc}
-                    </ul>
-                </div>
-                
-                {content}
-            </div>
-        </body>
-        </html>
-        """
+    def _extract_content(self, doc) -> None:
+        """Extrait et traite le contenu textuel du PDF."""
+        current_chapter = []
+        chapter_number = 0
 
-        # Générer la table des matières et le contenu comme dans votre code original
-        toc = ""
-        for chapter in self.chapters:
-            toc += f'<li><a class="toc-item" href="#chapter-{chapter["number"]}">{chapter["title"]}</a></li>\n'
+        for page in doc:
+            text = page.get_text()
+            lines = text.split("\n")
 
-        content = ""
-        for i, chapter in enumerate(self.chapters):
-            content += f"""
-            <div class="chapter" id="chapter-{chapter['number']}">
-                <h2 class="chapter-title">{chapter['title']}</h2>
-                {chapter['content']}
-            </div>
-            """
-            if i < len(self.images):
-                content += f'<img src="{self.images[i]["data"]}" alt="{self.images[i]["alt"]}">'
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
 
-        return html_template.format(title=self.title, toc=toc, content=content)
-
-    def save_html(self, output_path):
-        # Créer le dossier de sortie s'il n'existe pas
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        html = self.generate_html()
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(html)
-        print(f"Page HTML générée avec succès: {output_path}")
-
-
-def process_page_content(text):
-    """Nettoie et formate le texte extrait du PDF pour un rendu HTML plus lisible."""
-    # Supprimer les lignes vides et les footers
-    lines = [
-        line.strip()
-        for line in text.split("\n")
-        if line.strip() and not line.startswith("https://")
-    ]
-
-    paragraphs = []
-    current_paragraph = ""
-    in_dialogue = False
-
-    for line in lines:
-        # Gestion spéciale pour les lignes commençant par "Partie"
-        if line.lower().startswith("partie"):
-            # Si on avait un paragraphe en cours, on le sauvegarde d'abord
-            if current_paragraph:
-                if in_dialogue:
-                    paragraphs.append(
-                        f"<blockquote>{current_paragraph.strip()}</blockquote>"
-                    )
-                else:
-                    paragraphs.append(f"<p>{current_paragraph.strip()}</p>")
-                current_paragraph = ""
-                in_dialogue = False
-
-            # Traitement spécial pour la ligne "Partie X [...]"
-            partie_match = re.match(
-                r"^(Partie\s+\d+)\s*[:\-–]?\s*(.*)$", line, re.IGNORECASE
-            )
-            if partie_match:
-                titre_partie = partie_match.group(1)
-                contenu_partie = partie_match.group(2)
-
-                # Ajouter le titre
-                paragraphs.append(f"<h2>{titre_partie}</h2>")
-
-                # Ajouter le contenu s'il existe
-                if contenu_partie:
-                    paragraphs.append(f"<p>{contenu_partie}</p>")
-            else:
-                # Fallback si le pattern ne correspond pas
-                paragraphs.append(f"<h2>{line}</h2>")
-
-            continue
-
-        # Gestion des dialogues commençant par "—"
-        if line.startswith("—"):
-            if current_paragraph and not in_dialogue:
-                paragraphs.append(f"<p>{current_paragraph.strip()}</p>")
-                current_paragraph = ""
-            in_dialogue = True
-            current_paragraph += line + " "
-        elif in_dialogue:
-            if line.endswith(".") or line.endswith("!") or line.endswith("?"):
-                current_paragraph += line + " "
-                paragraphs.append(
-                    f"<blockquote>{current_paragraph.strip()}</blockquote>"
+                chapter_match = self.pattern_matcher.detect_chapter(
+                    line, self.metadata.language
                 )
-                current_paragraph = ""
-                in_dialogue = False
-            else:
-                current_paragraph += line + " "
-        elif line.endswith(".") or line.endswith("!") or line.endswith("?"):
-            current_paragraph += line + " "
-            paragraphs.append(f"<p>{current_paragraph.strip()}</p>")
-            current_paragraph = ""
-        else:
-            current_paragraph += line + " "
 
-    # Ajouter le dernier paragraphe si non vide
-    if current_paragraph:
-        if in_dialogue:
-            paragraphs.append(f"<blockquote>{current_paragraph.strip()}</blockquote>")
-        else:
-            paragraphs.append(f"<p>{current_paragraph.strip()}</p>")
+                if chapter_match:
+                    # Sauvegarder le chapitre précédent s'il existe
+                    if current_chapter:
+                        self._save_chapter(chapter_number, current_chapter)
 
-    # Joindre les paragraphes formatés
-    return "\n".join(paragraphs)
+                    chapter_number = int(chapter_match[0])
+                    current_chapter = [chapter_match[1] if chapter_match[1] else ""]
+                else:
+                    if (
+                        current_chapter or not self.chapters
+                    ):  # Si dans un chapitre ou premier texte
+                        current_chapter.append(line)
 
+        # Sauvegarder le dernier chapitre
+        if current_chapter:
+            self._save_chapter(chapter_number, current_chapter)
 
-def extract_chapters(text):
-    """Extrait les chapitres du texte."""
-    chapters = []
-    current_chapter = ""
-    current_title = ""
+    def _save_chapter(self, number: int, content: List[str]) -> None:
+        """Sauvegarde un chapitre traité."""
+        title = content[0] if content else f"Chapter {number}"
+        processed_content = self.processor.process_content("\n".join(content[1:]))
+        self.chapters.append(ChapterInfo(number, title, processed_content))
 
-    lines = text.split("\n")
-    in_chapter = False
-
-    for line in lines:
-        if "Chapitre" in line and ":" in line:
-            # Si on était déjà dans un chapitre, on l'ajoute à la liste
-            if in_chapter:
-                chapters.append((current_title, current_chapter))
-
-            current_title = line.strip()
-            current_chapter = ""
-            in_chapter = True
-        elif in_chapter:
-            current_chapter += line + "\n"  # Conserver les sauts de ligne
-
-    # Ajouter le dernier chapitre
-    if in_chapter:
-        chapters.append((current_title, current_chapter))
-
-    return chapters
-
-
-def convert_ln_to_html(input_file, output_file):
-    """Fonction principale pour convertir le light novel en HTML"""
-    ln = LightNovelConverter("Mushoku Tensei (LN) – Tome 15")
-
-    try:
-        # Ouvrir le PDF avec PyMuPDF
-        pdf_document = fitz.open(input_file)
-
-        # Extraire le texte
-        full_text = ""
-        for page in pdf_document:
-            full_text += page.get_text()
-
-        # Extraire les chapitres
-        chapters = extract_chapters(full_text)
-
-        # Ajouter les chapitres au convertisseur
-        for i, (title, content) in enumerate(chapters, 1):
-            formatted_content = process_page_content(content)
-            ln.add_chapter(i, title, formatted_content)
-
-        # Extraire les images
-        for page_num in range(len(pdf_document)):
-            page = pdf_document[page_num]
+    def _extract_images(self, doc) -> None:
+        """Extrait les images du PDF."""
+        for page_num in range(len(doc)):
+            page = doc[page_num]
             image_list = page.get_images()
 
-            for image_index, img in enumerate(image_list):
+            for img_idx, img in enumerate(image_list):
                 try:
                     xref = img[0]
-                    base_image = pdf_document.extract_image(xref)
-                    image_data = base_image["image"]
+                    base_image = doc.extract_image(xref)
+                    image_bytes = base_image["image"]
 
-                    ln.add_image(image_data, f"Image {page_num+1}-{image_index+1}")
+                    img_data = base64.b64encode(image_bytes).decode("utf-8")
+                    self.images.append(
+                        {
+                            "data": f"data:image/jpeg;base64,{img_data}",
+                            "alt": f"Image {page_num+1}-{img_idx+1}",
+                        }
+                    )
                 except Exception as e:
-                    print(
-                        f"Erreur lors de l'extraction de l'image {page_num+1}-{image_index+1}: {e}"
+                    print(f"Erreur lors de l'extraction de l'image: {e}")
+
+    def save_html(self, output_path: str) -> None:
+        """Génère et sauve le fichier HTML final."""
+        html_content = self._generate_html()
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+
+    def _generate_html(self) -> str:
+        """Génère le contenu HTML avec le style approprié."""
+        # Le template HTML reste le même que dans votre code original
+        # Vous pouvez le personnaliser selon vos besoins
+        return self._get_html_template().format(
+            title=self.metadata.title,
+            language=self.metadata.language,
+            toc=self._generate_toc(),
+            content=self._generate_content(),
+        )
+
+    def _generate_toc(self) -> str:
+        """Génère la table des matières."""
+        return "\n".join(
+            f'<li><a class="toc-item" href="#chapter-{chapter.number}">'
+            f"{chapter.title}</a></li>"
+            for chapter in self.chapters
+        )
+
+    def _generate_content(self) -> str:
+        """Génère le contenu principal avec les chapitres et images."""
+        content = []
+        images_per_chapter = max(1, len(self.images) // max(1, len(self.chapters)))
+        current_image = 0
+
+        for chapter in self.chapters:
+            # Ajouter le contenu du chapitre
+            chapter_content = f"""
+            <div class="chapter" id="chapter-{chapter.number}">
+                <h2 class="chapter-title">{chapter.title}</h2>
+                {chapter.content}
+            </div>
+            """
+            content.append(chapter_content)
+
+            # Ajouter les images assignées à ce chapitre
+            for _ in range(images_per_chapter):
+                if current_image < len(self.images):
+                    content.append(
+                        f'<div class="image-container">'
+                        f'<img src="{self.images[current_image]["data"]}" '
+                        f'alt="{self.images[current_image]["alt"]}">'
+                        f"</div>"
+                    )
+                    current_image += 1
+
+        # Ajouter les images restantes à la fin si nécessaire
+        while current_image < len(self.images):
+            content.append(
+                f'<div class="image-container">'
+                f'<img src="{self.images[current_image]["data"]}" '
+                f'alt="{self.images[current_image]["alt"]}">'
+                f"</div>"
+            )
+            current_image += 1
+
+        return "\n".join(content)
+
+    def _extract_images(self, doc) -> None:
+        """Extrait les images du PDF en évitant les doublons."""
+        seen_images = set()  # Pour stocker les hash des images
+
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            image_list = page.get_images()
+
+            for img_idx, img in enumerate(image_list):
+                try:
+                    xref = img[0]
+                    base_image = doc.extract_image(xref)
+                    image_bytes = base_image["image"]
+
+                    # Vérifier la taille minimale
+                    if len(image_bytes) < 10000:  # Ignorer les trop petites images
+                        continue
+
+                    # Créer un hash de l'image pour détecter les doublons
+                    img_hash = hash(image_bytes)
+                    if img_hash in seen_images:
+                        continue
+
+                    seen_images.add(img_hash)
+                    img_data = base64.b64encode(image_bytes).decode("utf-8")
+                    self.images.append(
+                        {
+                            "data": f"data:image/jpeg;base64,{img_data}",
+                            "alt": f"Illustration {len(self.images) + 1}",
+                        }
                     )
 
-        # Fermer le PDF
-        pdf_document.close()
+                except Exception as e:
+                    print(f"Erreur lors de l'extraction de l'image: {e}")
 
-        # Générer le fichier HTML
-        ln.save_html(output_file)
+    def _get_html_template(self) -> str:
+        """Retourne le template HTML avec les styles."""
+        return """<!DOCTYPE html>
+            <html lang="{language}">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>{title}</title>
+                <style>
+                    :root {{
+                        --bg-color: #1a1a1a;
+                        --text-color: #e0e0e0;
+                        --header-bg: #2d2d2d;
+                        --link-color: #66b3ff;
+                    }}
+                    
+                    body {{
+                        background-color: var(--bg-color);
+                        color: var(--text-color);
+                        font-family: 'Arial', sans-serif;
+                        line-height: 1.6;
+                        margin: 0;
+                        padding: 0;
+                    }}
+                    
+                    .header {{
+                        background-color: var(--header-bg);
+                        padding: 1rem;
+                        position: sticky;
+                        top: 0;
+                        z-index: 100;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                    }}
+                    
+                    .container {{
+                        max-width: 800px;
+                        margin: 0 auto;
+                        padding: 1rem;
+                    }}
+                    
+                    .image-container {{
+                        display: flex;  
+                        justify-content: center;
+                        align-items: center;
+                        margin: 2rem 0;
+                        width: 100%;
+                    }}
+                    
+                    .chapter {{
+                        margin-bottom: 2rem;
+                        padding: 1rem;
+                        background-color: rgba(255,255,255,0.05);
+                        border-radius: 8px;
+                    }}
+                    
+                    .chapter-title {{
+                        color: var(--link-color);
+                        margin-bottom: 1rem;
+                    }}
+                    
+                    .toc {{
+                        margin: 2rem 0;
+                        padding: 1rem;
+                        background-color: var(--header-bg);
+                        border-radius: 8px;
+                    }}
+                    
+                    .toc-item {{
+                        color: var(--link-color);
+                        text-decoration: none;
+                    }}
+                    
+                    .toc-item:hover {{
+                        text-decoration: underline;
+                    }}
+                    
+                    img {{
+                        max-width: 100%;
+                        height: auto;
+                        border-radius: 8px;
+                        margin: 1rem 0;
+                    }}
+                    
+                    p {{
+                        margin-bottom: 1.5em;
+                        text-align: justify;
+                    }}
+                    
+                    blockquote {{
+                        margin: 1.5rem 0;
+                        padding: 1rem;
+                        background-color: rgba(255, 255, 255, 0.1);
+                        border-left: 4px solid var(--link-color);
+                        font-style: italic;
+                        color: var(--text-color);
+                    }}
+                    
+                    @media (max-width: 768px) {{
+                        .container {{
+                            padding: 0.5rem;
+                        }}
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <div class="container">
+                        <h1>{title}</h1>
+                    </div>
+                </div>
+                
+                <div class="container">
+                    <div class="toc">
+                        <h2>Table des matières</h2>
+                        <ul>
+                            {toc}
+                        </ul>
+                    </div>
+                    
+                    {content}
+                </div>
+            </body>
+            </html>"""
 
+
+def convert_novel(pdf_path: str, output_path: str, title: str = None) -> bool:
+    """Fonction principale pour convertir un novel PDF en HTML."""
+    try:
+        # Détecter la langue du document
+        doc = fitz.open(pdf_path)
+        sample_text = ""
+        for page in range(min(5, len(doc))):  # Échantillon des 5 premières pages
+            sample_text += doc[page].get_text()
+        doc.close()
+
+        detected_language = detect(sample_text)[
+            :2
+        ]  # Prendre les 2 premiers caractères (fr, en, ja, etc.)
+
+        # Créer les métadonnées
+        metadata = NovelMetadata(
+            title=title or os.path.splitext(os.path.basename(pdf_path))[0],
+            language=detected_language,
+        )
+
+        # Initialiser et utiliser le convertisseur
+        converter = NovelConverter(metadata)
+        converter.process_pdf(pdf_path)
+        converter.save_html(output_path)
+
+        return True
     except Exception as e:
-        print(f"Une erreur est survenue: {e}")
+        print(f"Erreur lors de la conversion: {e}")
         return False
 
-    return True
 
+# Utilisation simple
+success = convert_novel(
+    "./input/Mushoku Tensei (LN) – Tome 15.pdf",
+    "./output/Mushoku Tensei (LN) - Tome 15.html",
+    "Mushoku Tensei",
+)
 
-if __name__ == "__main__":
-    # Exemple d'utilisation
-    input_file = "./input/Mushoku Tensei (LN) – Tome 15.pdf"
-    output_file = "./output/Mushoku Tensei (LN) - Tome 15.html"
-
-    if convert_ln_to_html(input_file, output_file):
-        print("Conversion terminée avec succès!")
-    else:
-        print("La conversion a échoué.")
+# Ou avec plus de contrôle
+metadata = NovelMetadata(
+    title="Mushoku Tensei",
+    language="fr",
+    author="Rifujin na Magonote",
+    volume="Tome 16",
+)
+converter = NovelConverter(metadata)
+converter.process_pdf("./input/Mushoku Tensei (LN) – Tome 15.pdf")
+converter.save_html("./output/Mushoku Tensei (LN) - Tome 15.html")
