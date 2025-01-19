@@ -340,10 +340,12 @@ class NovelConverter:
                 <title>{title}</title>
                 <style>
                     :root {{
-                        --bg-color: #1a1a1a;
+                        --bg-color: #0a0a0a;             /* Fond plus sombre */
+                        --content-bg: #1a1a1a;           /* Fond de la zone de lecture */
                         --text-color: #e0e0e0;
                         --header-bg: #2d2d2d;
                         --link-color: #66b3ff;
+                        --container-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); /* Ombre pour la profondeur */
                     }}
                     
                     body {{
@@ -352,35 +354,49 @@ class NovelConverter:
                         font-family: 'Arial', sans-serif;
                         line-height: 1.6;
                         margin: 0;
-                        padding: 0;
+                        padding: 20px;                    /* Ajout de padding pour l'espacement */
+                        min-height: 100vh;
                     }}
                     
                     .container {{
                         max-width: 800px;
-                        margin: 1.5rem auto;
-                        padding: 1rem;
-                        background-color: rgba(255,255,255,0.05);
-                        border-radius: 8px;
+                        margin: 0 auto;
+                        padding: 2rem;
+                        background-color: var(--content-bg);
+                        border-radius: 12px;
+                        box-shadow: var(--container-shadow);
                     }}
                     
                     .container.paragraph {{
-                        margin-bottom: 1.5rem;
+                        margin-bottom: 0.2rem;  /* Réduit de 1.5rem à 0.8rem */
                         text-align: justify;
+                        background-color: transparent;
+                        box-shadow: none;
+                        line-height: 1.4;  /* Réduit de 1.6 à 1.4 */
                     }}
                     
                     .container.dialogue {{
-                        margin: 1.5rem auto;
-                        padding: 1rem;
-                        background-color: rgba(255,255,255,0.1);
+                        margin: 0.8rem 0;  /* Réduit de 1.5rem à 0.8rem */
+                        padding: 0.8rem;   /* Réduit de 1rem à 0.8rem */
+                        background-color: rgba(255, 255, 255, 0.05);
                         border-left: 4px solid var(--link-color);
                         font-style: italic;
+                        color: var(--text-color);
+                        border-radius: 4px;
+                    }}
+                    
+                    .chapter {{
+                        margin-bottom: 2rem;
+                        padding: 1rem;
                     }}
                     
                     .chapter-title {{
                         color: var(--link-color);
-                        margin: 2rem 0 1rem 0;
+                        margin-bottom: 1rem;
                         font-size: 1.5rem;
                         text-align: center;
+                        padding: 1rem 0;
+                        border-bottom: 2px solid var(--header-bg);
                     }}
                     
                     .image-wrapper {{
@@ -388,24 +404,38 @@ class NovelConverter:
                         justify-content: center;
                         align-items: center;
                         margin: 2rem 0;
+                        width: 100%;
                     }}
                     
                     .image-wrapper img {{
                         max-width: 100%;
                         height: auto;
                         border-radius: 8px;
+                        box-shadow: var(--container-shadow);
+                    }}
+                    
+                    p {{
+                        margin-bottom: 0.8em;  /* Réduit de 1.5em à 0.8em */
+                        text-align: justify;
                     }}
                     
                     @media (max-width: 768px) {{
+                        body {{
+                            padding: 10px;
+                        }}
+                        
                         .container {{
-                            margin: 1rem;
-                            padding: 0.5rem;
+                            padding: 1rem;
+                            margin: 0;
+                            border-radius: 8px;
                         }}
                     }}
                 </style>
             </head>
             <body>
-                {content}
+                <div class="container">
+                    {content}
+                </div>
             </body>
             </html>"""
     
