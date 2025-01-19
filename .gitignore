@@ -1,4 +1,4 @@
 .pycache
 .vscode
-.pdf
-.html
+*.pdf
+*.html
