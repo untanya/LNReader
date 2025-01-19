@@ -487,18 +487,18 @@ def convert_novel(pdf_path: str, output_path: str, title: str = None) -> bool:
 
 # Utilisation simple
 success = convert_novel(
-    "./input/Mushoku Tensei (LN) – Tome 15.pdf",
-    "./output/Mushoku Tensei (LN) - Tome 15.html",
+    "./input/Mushoku Tensei - Jobless Reincarnation Volume-15.pdf",
+    "./output/Mushoku Tensei - Jobless Reincarnation Volume-15.html",
     "Mushoku Tensei",
 )
 
 # Ou avec plus de contrôle
 metadata = NovelMetadata(
     title="Mushoku Tensei",
-    language="fr",
+    language="en",
     author="Rifujin na Magonote",
-    volume="Tome 16",
+    volume="Tome 15",
 )
 converter = NovelConverter(metadata)
-converter.process_pdf("./input/Mushoku Tensei (LN) – Tome 15.pdf")
-converter.save_html("./output/Mushoku Tensei (LN) - Tome 15.html")
+converter.process_pdf("./input/Mushoku Tensei - Jobless Reincarnation Volume-15.pdf")
+converter.save_html("./output/Mushoku Tensei - Jobless Reincarnation Volume-15.html")
