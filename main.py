@@ -173,7 +173,7 @@ class LightNovelConverter:
 
 
 def process_page_content(text):
-    """Nettoie et formate le texte extrait du PDF."""
+    """Nettoie et formate le texte extrait du PDF pour un rendu HTML plus lisible."""
     # Supprimer les lignes vides et les footers
     lines = [
         line.strip()
@@ -181,31 +181,55 @@ def process_page_content(text):
         if line.strip() and not line.startswith("https://")
     ]
 
-    # Joindre les lignes en paragraphes
     paragraphs = []
     current_paragraph = ""
+    in_dialogue = False
 
     for line in lines:
-        if line.endswith(".") or line.endswith("!") or line.endswith("?"):
+        # Gestion des dialogues commençant par "—"
+        if line.startswith("—"):
+            if current_paragraph and not in_dialogue:
+                paragraphs.append(current_paragraph.strip())
+                current_paragraph = ""
+            in_dialogue = True
             current_paragraph += line + " "
-            paragraphs.append(current_paragraph.strip())
+        elif in_dialogue:
+            if line.endswith(".") or line.endswith("!") or line.endswith("?"):
+                current_paragraph += line + " "
+                paragraphs.append(
+                    f"<blockquote>{current_paragraph.strip()}</blockquote>"
+                )
+                current_paragraph = ""
+                in_dialogue = False
+            else:
+                current_paragraph += line + " "
+        elif line.endswith(".") or line.endswith("!") or line.endswith("?"):
+            current_paragraph += line + " "
+            paragraphs.append(f"<p>{current_paragraph.strip()}</p>")
             current_paragraph = ""
         else:
             current_paragraph += line + " "
 
+    # Ajouter le dernier paragraphe si non vide
     if current_paragraph:
-        paragraphs.append(current_paragraph.strip())
+        if in_dialogue:
+            paragraphs.append(f"<blockquote>{current_paragraph.strip()}</blockquote>")
+        else:
+            paragraphs.append(f"<p>{current_paragraph.strip()}</p>")
 
-    # Entourer chaque paragraphe avec des balises <p>
-    formatted_paragraphs = [f"<p>{p}</p>" for p in paragraphs]
+    # Améliorer le formatage pour HTML
+    formatted_paragraphs = []
+    for paragraph in paragraphs:
+        if paragraph.lower().startswith("<p>partie"):
+            # Mettre en avant les parties avec un titre
+            formatted_paragraphs.append(
+                paragraph.replace("<p>", "<h2>").replace("</p>", "</h2>")
+            )
+        else:
+            formatted_paragraphs.append(paragraph)
 
     # Joindre les paragraphes formatés
     formatted_text = "\n".join(formatted_paragraphs)
-
-    # Identifier des citations ou dialogues et les formater comme un blockquote
-    formatted_text = formatted_text.replace("Citation:", "<blockquote>").replace(
-        "Fin Citation", "</blockquote>"
-    )
 
     return formatted_text
 
